@@ -1,6 +1,6 @@
 {
   "name": "@resolute/promise-keeper",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Simple caching for promises.",
   "main": "./",
   "types": "./",
