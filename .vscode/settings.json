@@ -1,0 +1,15 @@
+{
+  "eslint.alwaysShowStatus": true,
+  "editor.tabSize": 2,
+  "files.insertFinalNewline": true,
+  "files.exclude": {
+    "**/*.d.ts": true,
+    "**/*.js": true,
+    "**/*.js.map": true,
+    "**/*.marko.js": true,
+    "node_modules": true
+  },
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": true
+  }
+}

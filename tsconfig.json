@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "declaration": true,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "noImplicitAny": false,
+    "outDir": ".",
+    "pretty": true,
+    "resolveJsonModule": true,
+    "sourceMap": false,
+    "strict": true,
+    "stripInternal": true,
+    "target": "es2018"
+  },
+  "include": [
+    "**/*.ts"
+  ],
+  "exclude": [
+    "**/*.js",
+    "**/*.d.ts"
+  ]
+}

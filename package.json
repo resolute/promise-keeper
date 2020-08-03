@@ -1,0 +1,49 @@
+{
+  "name": "@resolute/promise-keeper",
+  "version": "0.0.0",
+  "description": "Simple caching for promises.",
+  "main": "./",
+  "types": "./",
+  "files": [
+    "*.js",
+    "*.d.ts"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "release": "np",
+    "prepublishOnly": "npm test && npm run build",
+    "clean": "del-cli *.js *.js.map *.d.ts",
+    "test": "node index.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/resolute/promise-keeper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/resolute/promise-keeper/issues"
+  },
+  "homepage": "https://github.com/resolute/promise-keeper",
+  "author": "Resolute Digital",
+  "engines": {
+    "node": ">=10.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "*",
+    "@typescript-eslint/parser": "*",
+    "del-cli": "*",
+    "eslint": "*",
+    "eslint-config-airbnb-base": "*",
+    "eslint-plugin-import": "*",
+    "np": "*",
+    "prettier": "*",
+    "typescript": "*"
+  },
+  "keywords": [
+    "cache promises"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "ISC"
+}
