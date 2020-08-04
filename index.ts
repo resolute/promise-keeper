@@ -5,31 +5,76 @@ interface KeptFunction<R> {
 const storage = new WeakMap<any, PromiseKeeper<any>>();
 
 /**
- * Promise Keeper
+ * Promise Keeper: caching for promises.
  *
- * Simple caching for promises.
+ * Provides caching behavior to an expensive function. Can perform periodic
+ * background refresh.
+ *
+ * The purpose of this module is to minimize waiting for time intensive
+ * functions to complete. This can also be used to provide a
+ * stale-while-revalidate pattern.
  *
  * Possible States:
  * 1. Empty
  * 2. Empty, Pending
  * 3. Filled          (fresh)
  * 4. Filled, Pending (stale)
+ *
  */
-class PromiseKeeper<F extends KeptFunction<any>> {
+export class PromiseKeeper<F extends KeptFunction<any>> {
   private fn: F;
   private settledData!: ReturnType<F>;
   private pendingData!: ReturnType<F>;
   private isEmpty = true;
   private isPending = false;
+  private freshTimer?: NodeJS.Timeout;
 
   constructor(fn: F) {
     this.fn = fn;
-    this.refresh();
+  }
+
+  private invoke() {
+    this.isPending = true;
+    this.pendingData = this.fn();
+    if (typeof this.pendingData?.finally === 'function') {
+      this.pendingData.finally(this.settle.bind(this));
+    } else {
+      this.settle();
+    }
+  }
+
+  private settle() {
+    // While this.pendingData was settling, it’s possible that .purge() was
+    // called. This is why we check that this.isPending is still true before
+    // changing state.
+    if (this.isPending) {
+      this.settledData = this.pendingData;
+      this.isEmpty = false;
+      this.isPending = false;
+    }
+  }
+
+  private clear() {
+    delete this.settledData;
+    delete this.pendingData;
+    this.isEmpty = true;
+    this.isPending = false;
+    return this;
   }
 
   /**
-   * Retrieve (possibly stale) cache. If empty, get a new copy, store in the
-   * cache, and return it.
+   * Checks for and returns pending data. Otherwise, returns settled if it
+   * exists. Otherwise, causes a new invocation and returns the result.
+   *
+   * Prioritizes pending data over settled data.
+   *
+   * When pending data is returned, another refresh() before it has settled will
+   * _not_ replace or affect the result.
+   *
+   * For example, assume your pending result will resolve to “A”. However,
+   * before your result settles, there is a refresh() which will resolve to
+   * result “B”. Your result will be unaffected and will still resolve to “A”.
+   * However, on a subsequent call to get(), your result will resolve to “B”.
    */
   public get() {
     if (this.isEmpty) {
@@ -39,7 +84,24 @@ class PromiseKeeper<F extends KeptFunction<any>> {
   }
 
   /**
-   * Retrieve settled data. If empty, throw error.
+   * Return settled data if exists. Otherwise, causes a new invocation and
+   * returns the result.
+   *
+   * Prioritizes settled data over possible pending executions. Useful when you
+   * want a fast response more than the latest.
+   */
+  public getSettled() {
+    if (!this.isEmpty) {
+      return this.settledData;
+    }
+    this.refresh();
+    return this.pendingData;
+  }
+
+  /**
+   * Return _only_ settled data. If empty, throws error.
+   *
+   * Useful when you do _not_ want to wait for a new invocation.
    */
   public getSettledOrThrow() {
     if (this.isEmpty) {
@@ -48,31 +110,14 @@ class PromiseKeeper<F extends KeptFunction<any>> {
     return this.settledData;
   }
 
-  private setPending(data: ReturnType<F>) {
-    this.isPending = true;
-    this.pendingData = data;
-    if (data && typeof data.finally === 'function') {
-      data.finally(this.setSettled.bind(this));
-    } else {
-      this.setSettled();
-    }
-  }
-
-  private setSettled() {
-    this.isPending = false;
-    this.isEmpty = false;
-    this.settledData = this.pendingData;
-  }
-
   /**
    * Gracefully refresh the cache. If the cache is updating, does _not_ refresh
    * again, but rather will return once the updating request is finished.
    */
   public refresh() {
-    if (this.isPending) {
-      return this;
+    if (!this.isPending) {
+      this.invoke();
     }
-    this.setPending(this.fn());
     return this;
   }
 
@@ -83,33 +128,27 @@ class PromiseKeeper<F extends KeptFunction<any>> {
   public purge() {
     // It’s possible that the purged pending update settles _after_ a following
     // refresh. In this case, the newly refreshed data will be purged.
-    if (this.pendingData && typeof this.pendingData.finally === 'function') {
-      this.pendingData.finally(this.clear.bind(this));
-    }
+    this.pendingData?.finally?.(this.clear.bind(this));
     this.clear();
     return this;
   }
 
-  private clear() {
-    delete this.settledData;
-    delete this.pendingData;
-    this.isEmpty = true;
-    return this;
-  }
-
-  private freshTimer?: NodeJS.Timeout;
-
-  public keepFresh(timeout = 1000 * 60 * 60 * 30) {
-    // default interval: 30 minutes
-    if (!Number.isFinite(timeout) || !(timeout > 0)) {
-      process.emitWarning(`Invalid millisecond duration for setInterval: “${timeout}”. Ignoring request to keep things fresh.`);
-      return this;
-    }
+  /**
+   * Refresh cache on a given interval.
+   * @param interval milliseconds to keep refreshing data
+   */
+  public keepFresh(interval = 1000 * 60 * 60 * 30) {
     this.stopFresh();
-    this.freshTimer = setInterval(this.refresh.bind(this), timeout).unref();
+    this.freshTimer = setInterval(() => {
+      process.nextTick(this.refresh.bind(this));
+    }, interval);
+    this.freshTimer.unref();
     return this;
   }
 
+  /**
+   * Terminate any keepFresh() intervals.
+   */
   public stopFresh() {
     if (this.freshTimer) {
       clearTimeout(this.freshTimer);
@@ -123,6 +162,7 @@ export default <F extends KeptFunction<any>>(fn: F) => {
   if (typeof existing === 'undefined') {
     const kept = new PromiseKeeper(fn);
     kept.get = kept.get.bind(kept);
+    kept.getSettled = kept.getSettled.bind(kept);
     kept.getSettledOrThrow = kept.getSettledOrThrow.bind(kept);
     kept.refresh = kept.refresh.bind(kept);
     kept.purge = kept.purge.bind(kept);

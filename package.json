@@ -6,10 +6,12 @@
   "types": "./",
   "files": [
     "*.js",
-    "*.d.ts"
+    "*.d.ts",
+    "!*.test.js",
+    "!*.test.d.ts"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "npm run clean && tsc && prettier --write *.js *.d.ts && (eslint --fix *.js > /dev/null 2>&1; true)",
     "release": "np",
     "prepublishOnly": "npm test && npm run build",
     "clean": "del-cli *.js *.js.map *.d.ts",
@@ -37,6 +39,7 @@
     "eslint-plugin-import": "*",
     "np": "*",
     "prettier": "*",
+    "ts-node": "*",
     "typescript": "*"
   },
   "keywords": [
