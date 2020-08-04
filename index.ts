@@ -14,12 +14,17 @@ const storage = new WeakMap<any, PromiseKeeper<any>>();
  * functions to complete. This can also be used to provide a
  * stale-while-revalidate pattern.
  *
- * Possible States:
- * 1. Empty
- * 2. Empty, Pending
- * 3. Filled          (fresh)
- * 4. Filled, Pending (stale)
+ * Terminology
+ * * **settled**: the last returned value of the expensive function, when it is
+ *   a promise, then that promise has already settled.
+ * * **pending**: the latest returned value of the expensive function, when it
+ *   is a promise, it has not settled yet.
  *
+ * Possible States:
+ * 1. ❌settled(empty)  ❌pending
+ * 2. ❌settled(empty)  ✅pending
+ * 3. ✅settled(fresh)  ✅pending  (settled === pending)
+ * 4. ✅settled(stale)  ✅pending  (settled !== pending)
  */
 export class PromiseKeeper<F extends KeptFunction<any>> {
   private fn: F;
@@ -63,20 +68,41 @@ export class PromiseKeeper<F extends KeptFunction<any>> {
   }
 
   /**
-   * Checks for and returns pending data. Otherwise, returns settled if it
-   * exists. Otherwise, causes a new invocation and returns the result.
+   * Purges any settled or pending data and invokes the expensive function and
+   * returns the resulting pending data.
    *
-   * Prioritizes pending data over settled data.
-   *
-   * When pending data is returned, another refresh() before it has settled will
-   * _not_ replace or affect the result.
-   *
-   * For example, assume your pending result will resolve to “A”. However,
-   * before your result settles, there is a refresh() which will resolve to
-   * result “B”. Your result will be unaffected and will still resolve to “A”.
-   * However, on a subsequent call to get(), your result will resolve to “B”.
+   * Note: This is the equivalent of `kept.purge().getPending()`
    */
-  public get() {
+  public getFresh() {
+    this.purge();
+    return this.getPending();
+  }
+
+  /**
+   * Prefers 1) **pending data**, 2) settled data, or 3) causes a new invocation
+   * and returns the pending result.
+   *
+   * **Warning**: Returned pending data *may be older than you think*—that
+   * pending data may have been pending for a long time.
+   *
+   * **Note**: Returned pending data will _NOT_ be replaced with newer pending
+   * data in the event of another caller causing a refresh.
+   *
+   * For example, assume your pending result will settle to “A”. However, before
+   * your result settles, there is a refresh() which will resolve to result “B”.
+   * Your result will be unaffected and will still resolve to “A”. However, on a
+   * subsequent call to getPending(), your result will resolve to “B”.
+   *
+   * @example
+   * const first = kept.getPending(); // pending data will settle to 'A'
+   * kept.purge(); // will force a new invocation on next get*
+   * const second = kept.getFresh(); // pending data will settle to 'B'
+   * await first // 'A'
+   * await second // 'B'
+   * // Note that first will not be replaced with the pending result
+   * // of second, even though second _could_ settle _before_ first.
+   */
+  public getPending() {
     if (this.isEmpty) {
       this.refresh();
     }
@@ -84,11 +110,11 @@ export class PromiseKeeper<F extends KeptFunction<any>> {
   }
 
   /**
-   * Return settled data if exists. Otherwise, causes a new invocation and
-   * returns the result.
+   * Prefers 1) **settled data**, 2) pending data, or 3) causes a new invocation
+   * and returns the pending result.
    *
-   * Prioritizes settled data over possible pending executions. Useful when you
-   * want a fast response more than the latest.
+   * Useful when fast access to potentially old data is more important than
+   * slower access to fresher data.
    */
   public getSettled() {
     if (!this.isEmpty) {
@@ -99,20 +125,40 @@ export class PromiseKeeper<F extends KeptFunction<any>> {
   }
 
   /**
-   * Return _only_ settled data. If empty, throws error.
+   * Returns _only_ settled data. If empty, throws Error **synchronously**.
    *
    * Useful when you do _not_ want to wait for a new invocation.
+   *
+   * **WARNING**: The `throw` will happen **synchronously** if no settled data
+   * is available. Even in the case where the settled data is a promise, the
+   * error thrown by this method will still be synchronous and has _nothing_ to
+   * do with the potential promise.
+   *
+   * @example
+   * // Good:
+   * try {
+   *   kept.getSyncOrThrowSync();
+   * } catch {
+   *   // No settled data is available, do something else…
+   * }
+   * // Bad:
+   * kept.getSyncOrThrowSync().catch(() => {
+   *   // This catch() would be bound to the possible promise
+   *   // returned by a successful kept.getSyncOrThrowSync().
+   *   // This catch() has _NOTHING_ to do with the
+   *   // **SYNCHRONOUS** throw of .getSyncOrThrowSync()
+   * });
    */
-  public getSettledOrThrow() {
+  public getSettledOrThrowSync() {
     if (this.isEmpty) {
-      throw new Error('No stale data in the cache.');
+      throw new Error('No settled data available.');
     }
     return this.settledData;
   }
 
   /**
-   * Gracefully refresh the cache. If the cache is updating, does _not_ refresh
-   * again, but rather will return once the updating request is finished.
+   * Gracefully refresh the settled data. Does _not_ invoke the expensive
+   * function if there already exists pending data.
    */
   public refresh() {
     if (!this.isPending) {
@@ -122,12 +168,22 @@ export class PromiseKeeper<F extends KeptFunction<any>> {
   }
 
   /**
-   * Remove whatever is in the cache and if there is an update pending, it will
-   * _not_ be stored in the cache.
+   * Remove any cached settled data and any pending data will be discarded and
+   * _not_ stored in the cache.
    */
   public purge() {
-    // It’s possible that the purged pending update settles _after_ a following
-    // refresh. In this case, the newly refreshed data will be purged.
+    // Pending data will set the settled cache to itself. In this case, perform
+    // another purge once the pending data settles.
+    //
+    // However, we will lose track of this pending data, and it’s possible that
+    // it settles far in the future. During that time, new pending data may be
+    // generated and even settle itself. Unfortunately, the old pending data
+    // might settle after this and will perform a purge, annoyingly removing the
+    // fresh data.
+    //
+    // TODO(adamchal) consider a solution that prevents a purged pending promise
+    // from potentially clearing future promises, which could settle before the
+    // now lost purged pending promise.
     this.pendingData?.finally?.(this.clear.bind(this));
     this.clear();
     return this;
@@ -161,9 +217,9 @@ export default <F extends KeptFunction<any>>(fn: F) => {
   const existing = storage.get(fn) as PromiseKeeper<F> | undefined;
   if (typeof existing === 'undefined') {
     const kept = new PromiseKeeper(fn);
-    kept.get = kept.get.bind(kept);
+    kept.getPending = kept.getPending.bind(kept);
     kept.getSettled = kept.getSettled.bind(kept);
-    kept.getSettledOrThrow = kept.getSettledOrThrow.bind(kept);
+    kept.getSettledOrThrowSync = kept.getSettledOrThrowSync.bind(kept);
     kept.refresh = kept.refresh.bind(kept);
     kept.purge = kept.purge.bind(kept);
     kept.keepFresh = kept.keepFresh.bind(kept);
