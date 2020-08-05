@@ -15,7 +15,7 @@
     "release": "np",
     "prepublishOnly": "npm test && npm run build",
     "clean": "del-cli *.js *.js.map *.d.ts",
-    "test": "node index.test.js"
+    "test": "npm run build && node index.test.js"
   },
   "repository": {
     "type": "git",
